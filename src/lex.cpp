@@ -13,7 +13,7 @@ typedef wave::cpplexer::lex_token<> token_t;
 typedef wave::cpplexer::lex_iterator<token_t > iter_t;
 typedef token_t::position_type pos_t;
 
-iter_t c, end;
+iter_t c, end, save;
 
 pos_t pos;
 
@@ -49,6 +49,16 @@ bool lex()
 		return false;
 	}
 	return true;
+}
+
+void lex_save()
+{
+	save=c;
+}
+
+void lex_rewind()
+{
+	c=save;
 }
 
 int get_tid()

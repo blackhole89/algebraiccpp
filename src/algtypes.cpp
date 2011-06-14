@@ -187,6 +187,16 @@ inline bool is_literal(int t)
 	return (t&0xFF000000)==0x40000000;
 }
 
+inline bool is_identifier(int t)
+{
+	return (t&0xFF000000)==0x10000000;
+}
+
+inline bool is_keyword(int t)
+{
+	return (t&0xFF000000)==0x20000000;
+}
+
 void try_lex()
 {
 	do {
@@ -234,8 +244,10 @@ public:
 				if(b->count((*i).second)) {
 					fprintf(fl,"&& ((%s)==(%s))",lhs.c_str(),(*b)[(*i).second].c_str()); // check binding is consistent
 				} else if((*i).second=="*") {
-				} else {
+				} else if(is_identifier((*i).first)) {
 					(*b)[(*i).second]=lhs+(evolve?".evolve()":"");
+				} else {
+					fprintf(fl,"&& ((%s)==(%s))",lhs.c_str(),(*i).second.c_str());
 				}
 				++i;
 			}
@@ -479,25 +491,120 @@ void do_read_match()
 	try_lex();
 }
 
+void do_read_matchfun()
+{
+	CMatch m;
+
+	while(get_tval()!="(") {
+		if(types.count(get_tval())) {
+			do_read_type();
+		} else {
+			fprintf(OUTF,"%s",get_tval().c_str());
+			lex();
+		}
+	}
+	while(get_tval()!=")") {
+		if(get_tval()==",") {
+			/* emit parameter */
+			char buf[16];
+			fprintf(OUTF," _p%d",freshgen);
+			sprintf(buf,"_p%d",freshgen);
+			m.inputs.push_back(buf);
+			++freshgen;
+		}
+		if(types.count(get_tval())) {
+			do_read_type();
+		} else {
+			fprintf(OUTF,"%s",get_tval().c_str());
+			lex();
+		}
+	}
+	fprintf(OUTF," _pl) {\n");
+	m.inputs.push_back("_pl");
+
+	do {
+		try_lex();
+		while(get_tval()!="(") try_lex();
+		try_lex();
+
+		std::vector<std::pair<int,std::string> > pat;
+
+		int d=0;
+		while(d || get_tval()!=")") {
+			if(get_tval()=="(") ++d;
+			else if(get_tval()==")") --d;
+			pat.push_back(std::pair<int,std::string>(get_tid(),get_tval()));
+			try_lex();
+		}
+		try_lex();
+
+		if(get_tval()!="{") error("Expected { in matching function.");
+		try_lex();
+		
+		m.emit_case(pat,OUTF);
+		if(get_tval()!="}") pass_case_or_scope();
+		m.emit_caseend(OUTF);
+
+		try_lex();
+	} while(get_tval()=="|");
+
+	fprintf(OUTF,"}\n\n");
+}
+
 /* *** */
 
-bool is_function=false;
+bool maybe_function=true;
+bool maybe_acceptablescope=false;
+int d=0,d_limit=0;
+std::string last_token;
 
 bool step()
 {
 	if(get_tval()=="datatype") {
 		try_lex();
 		do_read_datatype();
+		lex_save();
 		try_lex();
 	} else if(get_tval()=="match") {
 		try_lex();
 		do_read_match();
+		lex_save();
 	} else if(types.count(get_tval())) {
 		do_read_type();
 	} else if(constructors.count(get_tval())) {
 		do_read_ctor();
-	} else {
+	} else if(d<=d_limit && (get_tval()=="namespace" || get_tval()=="class" || get_tval()=="struct" || get_tval()=="=")) {
+		maybe_acceptablescope=true;
+		d_limit++;
 		fprintf(OUTF,"%s",get_tval().c_str());
+		return lex();
+	} else if(maybe_function && is_identifier(get_tid()) && d<=d_limit && last_token==")") {
+		/* assume matching function */
+		fprintf(OUTF,";\n");
+		lex_rewind(); // go back to last } or ;
+		lex();
+		while(!is_identifier(get_tid()) && !is_keyword(get_tid())) lex();
+		maybe_function=false; //prevent nasty recursion
+		do_read_matchfun();
+		last_token="";
+		maybe_function=true;
+	} else {
+		if(get_tval()=="{") {
+			maybe_acceptablescope=false;
+			++d;
+		} else if(get_tval()=="}") {
+			lex_save();
+			--d;
+			if(d<d_limit) --d_limit; // leave a "good" scope (namespace, class, struct)
+		} else if(get_tval()==";") {
+			lex_save();
+			if(maybe_acceptablescope) {
+				maybe_acceptablescope=false;
+				--d_limit; //class or struct was just a declaration
+			}
+		}
+		fprintf(OUTF,"%s",get_tval().c_str());
+		if(!is_space(get_tid())) last_token=get_tval();
 		return lex();
 	}
 	return true;
